@@ -65,19 +65,16 @@ bool Pusher::Initialize()
 {
     int ret = 0;
 
+    /// 为输入分配一个AVFormatContext对象
     m_inputContext = avformat_alloc_context();
     if(nullptr == m_inputContext)
     {
         return false;
     }
 
-    m_outputContext = avformat_alloc_context();
-    if(nullptr == m_inputContext)
-    {
-        avformat_close_input(&m_inputContext);
-        return false;
-    }
-
+    /// 打开输入流，注意调用了这个函数之后，m_inputContext才的iformat才会被分配对象
+    /// 否则会被设置为空
+    /// FFmpeg的说明中，也强调了AVFormatContext中的iformat应该由该函数来分配对象，不能手动赋值。
     ret = avformat_open_input(&m_inputContext, m_input.c_str(), nullptr, nullptr);
     if (ret < 0)
     {
@@ -87,15 +84,17 @@ bool Pusher::Initialize()
     }
     LOG("Input format %s, duration %lld us", m_inputContext->iformat->long_name, m_inputContext->duration);
 
-    ret = avformat_find_stream_info(m_inputContext, 0);
+    /// 从上下文中解析流数据
+    ret = avformat_find_stream_info(m_inputContext, nullptr);
     if (ret < 0)
     {
         LOG("Failed to retrieve input stream information. error code is %d", ret);
         avformat_close_input(&m_inputContext);
     }
-
     av_dump_format(m_inputContext, 0, m_input.c_str(), 0);
-    avformat_alloc_output_context2(&m_outputContext, NULL, "flv", m_output.c_str());
+
+    /// 为输出流分配一个上下文对象，指定输出流的格式
+    avformat_alloc_output_context2(&m_outputContext, nullptr, "flv", m_output.c_str());
     LOG("Input format %s, duration %lld us", m_outputContext->oformat->long_name, m_outputContext->duration);
 
     if (m_outputContext == nullptr)
@@ -105,6 +104,7 @@ bool Pusher::Initialize()
         return false;
     }
 
+    /// 从输入流中复制AVStream对象。
     for (uint32_t index = 0; index < m_inputContext->nb_streams; ++index)
     {
         //根据输入流创建输出流
@@ -116,7 +116,7 @@ bool Pusher::Initialize()
             CloseContext(m_inputContext, m_outputContext);
             return false;
         }
-        //复制AVCodecContext的设置（Copy the settings of AVCodecContext）
+        //复制AVCodecContext的设置
         ret = avcodec_copy_context(outStream->codec, inStream->codec);
         if (ret < 0)
         {
@@ -145,6 +145,7 @@ bool Pusher::Initialize()
         }
     }
 
+    /// 记录视频流和音频流的StreamID
     ret = ParseVideoAndAudioStreamIndex();
     if (ret != 0)
     {
@@ -197,7 +198,7 @@ void Pusher::Delay(const AVPacket &packet, const int64_t &startTime) const
 
 int32_t Pusher::Push()
 {
-    //写文件头（Write file header）
+    //写文件头
     int ret = avformat_write_header(m_outputContext, NULL);
 
     if (ret < 0)
@@ -234,6 +235,7 @@ int32_t Pusher::Push()
             packet.duration = (double) calc_duration / (double) (av_q2d(time_base1) * AV_TIME_BASE);
         }
 
+        /// 延迟发送，否则会出错
         Delay(packet, start_time);
 
         inStream = m_inputContext->streams[packet.stream_index];
@@ -266,7 +268,7 @@ int32_t Pusher::Push()
         av_free_packet(&packet);
 
     }
-    //写文件尾（Write file trailer）
+    //写文件尾
     av_write_trailer(m_outputContext);
 
     return 0;
